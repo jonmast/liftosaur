@@ -103,7 +103,7 @@ android {
     }
 
     defaultConfig {
-        applicationId "com.liftosaur.www.twa"
+        applicationId "com.liftosaur.www.fork"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 143
