@@ -8,3 +8,4 @@ extensions.configure(com.facebook.react.ReactSettingsExtension){ ex -> ex.autoli
 rootProject.name = 'com.liftosaur.www.twa'
 include ':app'
 includeBuild('../node_modules/@react-native/gradle-plugin')
+include ':wear'
