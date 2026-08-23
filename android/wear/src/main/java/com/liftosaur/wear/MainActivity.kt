@@ -33,6 +33,7 @@ private object Routes {
     const val EXERCISES = "exercises"
     const val DETAIL = "detail"
     const val PROMPT = "prompt"
+    const val ENGINE = "engine"
 }
 
 @Composable
@@ -50,6 +51,7 @@ fun WearApp() {
                 "variants" -> Routes.VARIANTS
                 "exercises" -> Routes.EXERCISES
                 "detail" -> Routes.DETAIL
+                "engine" -> Routes.ENGINE
                 "prompt" -> {
                     promptAt = PrototypeStore.entry(openEntryIndex).nextUnfinished()?.at
                     if (promptAt == null) null else Routes.PROMPT
@@ -79,6 +81,9 @@ fun WearApp() {
                 }
                 composable(Routes.VARIANTS) {
                     VariantsScreen()
+                }
+                composable(Routes.ENGINE) {
+                    EngineScreen()
                 }
                 composable(Routes.EXERCISES) {
                     ExerciseListScreen(

@@ -69,3 +69,10 @@ logs/
 
 # Dev-only perf instrumentation data (streamed from RN app to devserver)
 /perfdata/*.jsonl
+
+# Wear OS companion (:wear) build outputs
+android/wear/build/
+android/wear/.cxx/
+# Baked by :wear:buildWatchBundle on every build, never by hand. Committing it would
+# reintroduce exactly the stale-artifact risk the always-regenerate rule exists to prevent.
+android/wear/src/main/assets/watch-bundle.js

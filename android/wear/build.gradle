@@ -9,21 +9,135 @@ repositories {
     mavenCentral()
 }
 
+// The phone app's applicationId. Duplicated here as a literal rather than hoisted into a
+// shared config, because hoisting would spend shared-file budget (ticket 05). The startup
+// assertion in LiftosaurWearApp compares against this: if the two ever diverge, the Wear
+// Data Layer silently stops routing rather than failing loudly.
+def phoneApplicationId = 'com.liftosaur.www.fork'
+
+def repoRoot = rootProject.projectDir.parentFile
+def watchBundleFile = new File(repoRoot, 'dist/watch-bundle.js')
+def bakedBundleDir = new File(projectDir, 'src/main/assets')
+def bakedBundleFile = new File(bakedBundleDir, 'watch-bundle.js')
+
+// Regenerate the bundle on EVERY :wear build rather than copying whatever is sitting in
+// dist/. A stale bundle is byte-indistinguishable from a fresh one, so detection is
+// impossible and prevention is the only option. Measured ~5s, too cheap to make conditional
+// (ticket 10).
+// Gradle 9 removed Project.exec() from task actions (no project access at execution time),
+// so shell-outs go through the injected ExecOperations service instead.
+interface WatchBundleExec {
+    @javax.inject.Inject
+    org.gradle.process.ExecOperations getExecOps()
+}
+
+tasks.register('buildWatchBundle') {
+    description = 'Regenerates dist/watch-bundle.js from source and bakes it into :wear assets.'
+
+    // Deliberately ALWAYS runs (~5s). Incremental up-to-date checks were tried and removed:
+    // getting them right requires enumerating every input that can change the bundle
+    // (src/**, both webpack configs, package-lock.json, the generated markdown sources...),
+    // and any input missed silently ships a stale bundle. Staleness is byte-undetectable at
+    // runtime, so the spec chose prevention over detection (ticket 10) — and a skipped task
+    // is exactly the detection-shaped hole that decision rejected.
+    outputs.upToDateWhen { false }
+
+    def execOps = objects.newInstance(WatchBundleExec).execOps
+
+    doLast {
+        if (!new File(repoRoot, 'node_modules').exists()) {
+            throw new GradleException(
+                "node_modules is missing at ${repoRoot}.\n" +
+                "Run `npm install` at the repo root before building :wear."
+            )
+        }
+
+        // The bundle imports src/generated/*, and a clean checkout has none. 0.1s.
+        execOps.exec {
+            workingDir repoRoot
+            commandLine 'npm', 'run', 'build:markdown'
+        }
+
+        execOps.exec {
+            workingDir repoRoot
+            environment 'NODE_ENV', 'production'
+            commandLine 'npx', 'webpack', '--config', 'android/wear/webpack.watch.js'
+        }
+
+        if (!watchBundleFile.exists()) {
+            throw new GradleException(
+                "webpack reported success but ${watchBundleFile} does not exist."
+            )
+        }
+
+        bakedBundleDir.mkdirs()
+        java.nio.file.Files.copy(
+            watchBundleFile.toPath(),
+            bakedBundleFile.toPath(),
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING
+        )
+
+        def sha = java.security.MessageDigest.getInstance('SHA-256')
+            .digest(bakedBundleFile.bytes)
+            .encodeHex().toString()
+        logger.lifecycle("watch bundle: ${bakedBundleFile.length()} bytes, sha256 ${sha.take(12)}")
+    }
+}
+
 android {
     namespace 'com.liftosaur.wear'
     compileSdk rootProject.ext.compileSdkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
+    ndkVersion rootProject.ext.ndkVersion
 
     defaultConfig {
-        applicationId 'com.liftosaur.www.fork'
+        applicationId phoneApplicationId
         minSdk 33
         targetSdk rootProject.ext.targetSdkVersion
+        // Never bumped: the upgrade channel is `adb install -r`, not a store listing. This
+        // makes on-device build identity load-bearing rather than cosmetic — hence
+        // WATCH_BUNDLE_SHA below (ticket 10).
         versionCode 1
         versionName "1.0"
+
+        buildConfigField 'String', 'PHONE_APPLICATION_ID', "\"${phoneApplicationId}\""
+
+        externalNativeBuild {
+            cmake {
+                // -DNDEBUG strips asserts from the vendored engine; the rest keeps the
+                // C build quiet about upstream's warnings, which we do not patch.
+                arguments '-DANDROID_STL=none'
+                cFlags '-DNDEBUG'
+            }
+        }
+
+        ndk {
+            // 32-bit only. The Pixel Watch 2 has no app_process64 and reports
+            // `armeabi-v7a,armeabi` — spec sheets claiming arm64 are wrong (ticket 01).
+            abiFilters 'armeabi-v7a'
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path 'src/main/cpp/CMakeLists.txt'
+            // Must match the nix composition (flake.nix cmakeVersions), or AGP tries to
+            // install its own into the read-only nix store.
+            version '3.22.1'
+        }
     }
 
     buildFeatures {
         compose true
+        buildConfig true
+    }
+
+    androidResources {
+        // Store the bundle uncompressed so it can be mmap'd from the APK via
+        // AssetFileDescriptor instead of inflating 442KB into the Java heap on every cold
+        // start. Costs ~332KB of APK; the engine+bundle are ~3% of a 27MB APK either way,
+        // so size was never the constraint (ticket 10).
+        noCompress += 'js'
     }
 
     buildTypes {
@@ -43,6 +157,66 @@ android {
     }
 }
 
+// Build identity is a GENERATED SOURCE, not a buildConfigField.
+//
+// BuildConfig fields must be known at configuration time, but the bundle — and therefore its
+// SHA — only exists after buildWatchBundle runs. Reading the SHA at configuration time would
+// report the *previous* build's bundle, which is exactly the stale-identity failure this
+// whole mechanism exists to prevent, and it would be invisible: a plausible-looking hash that
+// is silently one build behind.
+//
+// Why identity matters at all here: versionCode is pinned at 1 forever and the watch is a
+// passive mirror of phone state, so "the screen shows the wrong thing" is otherwise ambiguous
+// between stale data and stale code (ticket 10).
+def generatedSrcDir = new File(buildDir, 'generated/source/buildidentity')
+
+tasks.register('generateBuildIdentity') {
+    description = 'Writes the baked bundle SHA and commithash into a generated Kotlin source.'
+    dependsOn tasks.named('buildWatchBundle')
+
+    inputs.file(bakedBundleFile)
+    outputs.dir(generatedSrcDir)
+
+    doLast {
+        def bytes = bakedBundleFile.bytes
+        def sha = java.security.MessageDigest.getInstance('SHA-256').digest(bytes)
+            .encodeHex().toString()
+
+        // The bundle's own commithash rides in an analytics payload, so unlike
+        // __BUNDLE_VERSION_WATCH_ANDROID__ (a `void`-ed const that terser folds away, and
+        // which appears 0 times in every production bundle ever served) it survives
+        // minification (ticket 10).
+        def text = new String(bytes, 'UTF-8')
+        def m = (text =~ /commithash["']?\s*[:=]\s*["']([0-9a-f]{6,40})["']/)
+        def commitHash = m ? m[0][1] : 'unknown'
+
+        def pkgDir = new File(generatedSrcDir, 'com/liftosaur/wear')
+        pkgDir.mkdirs()
+        new File(pkgDir, 'BuildIdentity.kt').text = """\
+// GENERATED by :wear:generateBuildIdentity. Do not edit.
+package com.liftosaur.wear
+
+object BuildIdentity {
+    const val WATCH_BUNDLE_SHA: String = "${sha}"
+    const val WATCH_BUNDLE_SHA_SHORT: String = "${sha.take(12)}"
+    const val WATCH_BUNDLE_COMMIT_HASH: String = "${commitHash}"
+    const val WATCH_BUNDLE_BYTES: Int = ${bytes.length}
+}
+"""
+        logger.lifecycle("build identity: sha ${sha.take(12)} commit ${commitHash} (${bytes.length} bytes)")
+    }
+}
+
+android.sourceSets.main.java.srcDir generatedSrcDir
+
+tasks.matching { it.name.startsWith('compile') && it.name.endsWith('Kotlin') }.configureEach {
+    dependsOn tasks.named('generateBuildIdentity')
+}
+
+tasks.matching { it.name.startsWith('merge') && it.name.endsWith('Assets') }.configureEach {
+    dependsOn tasks.named('buildWatchBundle')
+}
+
 kotlin {
     jvmToolchain(17)
 }
@@ -56,5 +230,6 @@ dependencies {
     implementation 'androidx.wear.compose:compose-navigation:1.6.2'
     implementation 'androidx.activity:activity-compose:1.10.1'
     implementation 'androidx.core:core-ktx:1.16.0'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2'
     debugImplementation 'androidx.wear.compose:compose-ui-tooling:1.6.2'
 }
