@@ -1,7 +1,21 @@
 plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
+    // These two must track rootProject.ext.kotlinVersion exactly. The `plugins` block is
+    // resolved before the root project's ext is readable, so the version cannot be
+    // interpolated here — it is a literal, checked against ext just below (ticket 06).
     id 'org.jetbrains.kotlin.plugin.compose' version '2.1.20'
+    id 'org.jetbrains.kotlin.plugin.serialization' version '2.1.20'
+}
+
+// A compiler-plugin/compiler version skew shows up as an opaque backend crash or a
+// silently-missing generated serializer, so it is turned into a configuration-time failure.
+def kotlinPluginVersion = '2.1.20'
+if (kotlinPluginVersion != rootProject.ext.kotlinVersion) {
+    throw new GradleException(
+        "Kotlin compiler plugins in wear/build.gradle are pinned to ${kotlinPluginVersion}, " +
+        "but rootProject.ext.kotlinVersion is ${rootProject.ext.kotlinVersion}. Update both."
+    )
 }
 
 repositories {
@@ -120,6 +134,8 @@ android {
         versionName "1.0"
 
         buildConfigField 'String', 'PHONE_APPLICATION_ID', "\"${phoneApplicationId}\""
+
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
 
         externalNativeBuild {
             cmake {
@@ -250,5 +266,13 @@ dependencies {
     implementation 'androidx.activity:activity-compose:1.10.1'
     implementation 'androidx.core:core-ktx:1.16.0'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2'
+    implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.0'
     debugImplementation 'androidx.wear.compose:compose-ui-tooling:1.6.2'
+
+    // The correctness tests (spec §4) run on the watch, not on the JVM: they exercise the
+    // real bundle in the real engine on the real 32-bit ABI, which is the only place the
+    // index-space, prompt-ordering, cache and NUL behaviours actually exist.
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2'
 }

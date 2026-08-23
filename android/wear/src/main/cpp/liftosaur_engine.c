@@ -204,10 +204,17 @@ JNIEXPORT jboolean JNICALL Java_com_liftosaur_wear_engine_LiftosaurEngine_native
   return JNI_TRUE;
 }
 
-// Calls Liftosaur[method](storage, ...extraArgs) and returns the result as UTF-8 bytes.
-// `storage` is the opaque storage JSON; `extraArgsJson` is a JSON array spread into argv[1..].
+// Calls Liftosaur[method](storage, [storage2,] ...extraArgs) and returns the result as UTF-8
+// bytes. `storage` is the opaque storage JSON; `storage2` is the second storage payload the
+// sync methods take (prepareSync's lastSynced, mergeStorage's incoming) and is omitted from
+// argv entirely when null; `extraArgsJson` is a JSON array spread into the remaining argv.
+//
+// storage2 gets its own byte[] parameter rather than riding inside extraArgsJson because it is
+// a full storage document: embedding it would mean escaping ~34KB of JSON into a JSON string
+// and parsing it twice, and it would put storage back on a lossy text path for no gain.
 JNIEXPORT jbyteArray JNICALL Java_com_liftosaur_wear_engine_LiftosaurEngine_nativeCall(
-    JNIEnv *env, jclass cls, jstring jmethod, jbyteArray storage, jstring jextra) {
+    JNIEnv *env, jclass cls, jstring jmethod, jbyteArray storage, jbyteArray storage2,
+    jstring jextra) {
   (void)cls;
   if (!g_ctx) {
     throw_java(env, "engine not initialized");
@@ -255,9 +262,18 @@ JNIEXPORT jbyteArray JNICALL Java_com_liftosaur_wear_engine_LiftosaurEngine_nati
   JSValue sval = JS_NewStringLen(g_ctx, (const char *)sbuf, (size_t)slen);
   (*env)->ReleaseByteArrayElements(env, storage, sbuf, JNI_ABORT);
 
-  int extra_count = 0;
-  JSValue argv[9];
+  int argc = 1;
+  JSValue argv[10];
   argv[0] = sval;
+
+  if (storage2) {
+    jsize s2len = (*env)->GetArrayLength(env, storage2);
+    jbyte *s2buf = (*env)->GetByteArrayElements(env, storage2, NULL);
+    argv[argc++] = JS_NewStringLen(g_ctx, (const char *)s2buf, (size_t)s2len);
+    (*env)->ReleaseByteArrayElements(env, storage2, s2buf, JNI_ABORT);
+  }
+
+  int extra_count = 0;
   int bad_extra = 0;
 
   if (extra && extra[0]) {
@@ -268,11 +284,12 @@ JNIEXPORT jbyteArray JNICALL Java_com_liftosaur_wear_engine_LiftosaurEngine_nati
     } else {
       int64_t len = 0;
       JS_GetLength(g_ctx, arr, &len);
-      if (len > 8) {
-        len = 8;
+      int64_t room = (int64_t)((int)(sizeof(argv) / sizeof(argv[0])) - argc);
+      if (len > room) {
+        len = room;
       }
       for (int64_t i = 0; i < len; i++) {
-        argv[1 + extra_count] = JS_GetPropertyUint32(g_ctx, arr, (uint32_t)i);
+        argv[argc + extra_count] = JS_GetPropertyUint32(g_ctx, arr, (uint32_t)i);
         extra_count++;
       }
       JS_FreeValue(g_ctx, arr);
@@ -285,16 +302,18 @@ JNIEXPORT jbyteArray JNICALL Java_com_liftosaur_wear_engine_LiftosaurEngine_nati
   }
 
   if (bad_extra) {
-    JS_FreeValue(g_ctx, sval);
+    for (int i = 0; i < argc; i++) {
+      JS_FreeValue(g_ctx, argv[i]);
+    }
     JS_FreeValue(g_ctx, fn);
     JS_FreeValue(g_ctx, lft);
     throw_java_owned(env, take_exception_text(g_ctx, "extra args parse"));
     return NULL;
   }
 
-  JSValue res = JS_Call(g_ctx, fn, lft, extra_count + 1, argv);
+  JSValue res = JS_Call(g_ctx, fn, lft, argc + extra_count, argv);
 
-  for (int i = 0; i < extra_count + 1; i++) {
+  for (int i = 0; i < argc + extra_count; i++) {
     JS_FreeValue(g_ctx, argv[i]);
   }
   JS_FreeValue(g_ctx, fn);
@@ -317,6 +336,46 @@ JNIEXPORT jbyteArray JNICALL Java_com_liftosaur_wear_engine_LiftosaurEngine_nati
   jbyteArray out = cstr_to_jbytes(env, rstr, rlen);
   JS_FreeCString(g_ctx, rstr);
   return out;
+}
+
+// Diagnostic: pushes bytes through the exact marshalling path nativeCall uses
+// (JS_NewStringLen in, JS_ToCStringLen out) and hands them straight back.
+//
+// This exists to test the byte[] boundary's central claim — that embedded NUL survives —
+// which nothing in the real call surface can prove, because every method returns a
+// JSON.stringify'd envelope in which NUL is re-escaped as \u0000 and so would pass even on a
+// boundary that mangles raw bytes. Both halves are length-counted, so the NUL is carried as
+// data rather than as a terminator; a jstring boundary substitutes U+FFFD outbound and
+// truncates inbound (ticket 07).
+JNIEXPORT jbyteArray JNICALL Java_com_liftosaur_wear_engine_LiftosaurEngine_nativeEcho(
+    JNIEnv *env, jclass cls, jbyteArray bytes) {
+  (void)cls;
+  if (!g_ctx) {
+    throw_java(env, "engine not initialized");
+    return NULL;
+  }
+
+  jsize len = (*env)->GetArrayLength(env, bytes);
+  jbyte *buf = (*env)->GetByteArrayElements(env, bytes, NULL);
+  JSValue val = JS_NewStringLen(g_ctx, (const char *)buf, (size_t)len);
+  (*env)->ReleaseByteArrayElements(env, bytes, buf, JNI_ABORT);
+
+  if (JS_IsException(val)) {
+    JS_FreeValue(g_ctx, val);
+    throw_java_owned(env, take_exception_text(g_ctx, "echo in"));
+    return NULL;
+  }
+
+  size_t outlen = 0;
+  const char *out = JS_ToCStringLen(g_ctx, &outlen, val);
+  JS_FreeValue(g_ctx, val);
+  if (!out) {
+    throw_java_owned(env, take_exception_text(g_ctx, "echo out"));
+    return NULL;
+  }
+  jbyteArray result = cstr_to_jbytes(env, out, outlen);
+  JS_FreeCString(g_ctx, out);
+  return result;
 }
 
 // Adjusts the JS allocation ceiling on a live runtime. Exists for the self-test, which

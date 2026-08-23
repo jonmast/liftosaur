@@ -76,15 +76,40 @@ object LiftosaurEngine {
     }
 
     /**
-     * Calls `Liftosaur.<method>(storage, ...extraArgs)`.
+     * Calls `Liftosaur.<method>(storage, [storage2,] ...extraArgs)`.
+     *
+     * This is the raw boundary: it does not know about envelopes, the storage cache, or which
+     * methods exist. [WatchJs] is the typed surface built on it, and is what callers should
+     * use — reaching past it skips the `cacheDirty` invariant.
      *
      * @param storage the opaque storage JSON. Never parsed on the Kotlin side.
-     * @param extraArgsJson a JSON array of primitives spread into argv[1..], or null.
+     * @param storage2 the second storage document taken by the sync methods, or null to omit
+     *   the argument entirely. It gets a byte[] of its own rather than riding in
+     *   [extraArgsJson] because escaping a whole storage document into a JSON string would
+     *   mean parsing it twice and put it back on a NUL-lossy path.
+     * @param extraArgsJson a JSON array of primitives spread into the remaining argv, or null.
      * @return the raw UTF-8 result bytes — an envelope the caller is responsible for parsing.
      */
-    fun call(method: String, storage: ByteArray, extraArgsJson: String? = null): ByteArray {
+    fun call(
+        method: String,
+        storage: ByteArray,
+        storage2: ByteArray? = null,
+        extraArgsJson: String? = null,
+    ): ByteArray {
         check(initialized) { "engine not initialized" }
-        return nativeCall(method, storage, extraArgsJson)
+        return nativeCall(method, storage, storage2, extraArgsJson)
+    }
+
+    /**
+     * Diagnostic: round-trips bytes through the same marshalling path [call] uses.
+     *
+     * Only the NUL round-trip test uses this. It cannot be done through the real surface,
+     * where every result is a JSON envelope with NUL re-escaped as `\u0000` — that would pass
+     * even on a boundary that corrupts raw bytes, which is precisely what jstring does.
+     */
+    fun echo(bytes: ByteArray): ByteArray {
+        check(initialized) { "engine not initialized" }
+        return nativeEcho(bytes)
     }
 
     /**
@@ -107,7 +132,15 @@ object LiftosaurEngine {
     private external fun nativeInit(prelude: ByteArray, bundle: ByteArray, memoryLimitBytes: Long): Boolean
 
     @JvmStatic
-    private external fun nativeCall(method: String, storage: ByteArray, extraArgsJson: String?): ByteArray
+    private external fun nativeCall(
+        method: String,
+        storage: ByteArray,
+        storage2: ByteArray?,
+        extraArgsJson: String?,
+    ): ByteArray
+
+    @JvmStatic
+    private external fun nativeEcho(bytes: ByteArray): ByteArray
 
     @JvmStatic
     private external fun nativeMallocSize(): Long
