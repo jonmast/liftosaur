@@ -2,7 +2,9 @@
 # Build :wear and sideload it to the watch. Run from anywhere in the repo.
 #
 # Must run inside `nix develop` (needs ANDROID_HOME, JDK 17, and the GRADLE_OPTS
-# that force AGP onto the nix-patched aapt2). See flake.nix.
+# that force AGP onto the nix-patched aapt2). See flake.nix. Note `adb` itself only
+# exists inside that shell — a bare `adb` on the ambient PATH is "command not found",
+# which misreads as an unplugged device.
 #
 # Wireless adb does NOT survive a watch reboot. When the serial goes stale:
 #   nmap -Pn --open -p 30000-49999 <watchIp>   # find the new debug port
