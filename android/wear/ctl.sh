@@ -11,12 +11,12 @@
 # Combine freely:  ./ctl.sh detail row entry 1 screen detail
 set -euo pipefail
 
-WATCH="${WATCH:-192.168.1.166:36035}"
+WATCH="${WATCH:-$("$(dirname "$0")/watch-serial.sh")}"
 PKG=com.liftosaur.www.fork
 RECEIVER="$PKG/com.liftosaur.wear.RemoteReceiver"
 
 if [ $# -eq 0 ]; then
-  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
   exit 0
 fi
 

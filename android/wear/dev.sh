@@ -6,12 +6,12 @@
 # exists inside that shell — a bare `adb` on the ambient PATH is "command not found",
 # which misreads as an unplugged device.
 #
-# Wireless adb does NOT survive a watch reboot. When the serial goes stale:
-#   nmap -Pn --open -p 30000-49999 <watchIp>   # find the new debug port
-#   adb connect <watchIp>:<port>               # re-pair first if that fails
+# The watch's endpoint is not stable; ./watch-serial.sh resolves it by device identity.
+# If it can't find the watch, open Settings > Developer options > Wireless debugging on the
+# watch — that alone re-advertises it over mDNS and adb reattaches.
 set -euo pipefail
 
-WATCH="${WATCH:-192.168.1.166:36035}"
+WATCH="${WATCH:-$("$(dirname "$0")/watch-serial.sh")}"
 PKG=com.liftosaur.www.fork
 ACTIVITY="$PKG/com.liftosaur.wear.MainActivity"
 

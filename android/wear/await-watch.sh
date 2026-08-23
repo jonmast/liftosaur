@@ -6,45 +6,30 @@
 # debugging is toggled, so a stale port is rediscovered by scanning rather than assumed.
 #
 #   ./await-watch.sh [apk] [timeoutSeconds]
+#
+# Discovery is by device identity (./watch-serial.sh), NOT by address. The previous
+# scan-the-subnet-for-a-watchy-hostname approach was tried and abandoned on 2026-08-23: the
+# watch broadcasts no hostname, while an ESP32 on the LAN calls itself
+# `android-5401faaf191c46de`, so hostname matching reliably picked the wrong device. Port
+# scanning fared no better — the watch's debug ports answer TCP but refuse the TLS handshake
+# once pairing lapses, which surfaces as `offline`, not as a connection failure.
+#
+# The reliable recovery is on the watch itself: opening Settings > Developer options >
+# Wireless debugging re-advertises it over mDNS and adb reattaches using the existing
+# pairing. This script waits for exactly that.
 set -uo pipefail
 
-IP="${WATCH_IP:-192.168.1.166}"
-LAST_PORT="${WATCH_PORT:-36035}"
 APK="${1:-android/wear/build/outputs/apk/release/wear-release.apk}"
 DEADLINE=$(( $(date +%s) + ${2:-900} ))
 
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
-discover_ip() {
-  # A reboot or new DHCP lease moves the watch, so fall back to finding it by hostname
-  # rather than giving up on the last-known address.
-  local found
-  found=$(nmap -sn "${SUBNET:-192.168.1.0/24}" 2>/dev/null \
-          | grep -iB2 -E "watch|aurora" \
-          | grep -oE "192\.168\.[0-9]+\.[0-9]+" | head -1)
-  [ -n "$found" ] && echo "$found"
-}
-
 find_endpoint() {
-  if ! ping -c1 -W1 "$IP" >/dev/null 2>&1; then
-    local moved
-    moved=$(discover_ip) || return 1
-    [ -n "$moved" ] || return 1
-    echo "watch moved: $IP -> $moved" >&2
-    IP="$moved"
-  fi
-  if timeout 10 adb connect "$IP:$LAST_PORT" 2>&1 | grep -q "^connected\|already connected"; then
-    echo "$IP:$LAST_PORT"; return 0
-  fi
-  local port
-  port=$(timeout 120 nmap -Pn -T4 --open -p 30000-49999 "$IP" 2>/dev/null \
-         | grep -oE "^[0-9]+/tcp" | cut -d/ -f1 | head -1)
-  [ -n "$port" ] || return 1
-  timeout 10 adb connect "$IP:$port" 2>&1 | grep -q "^connected" || return 1
-  echo "$IP:$port"
+  android/wear/watch-serial.sh 2>/dev/null
 }
 
-echo "waiting for watch at $IP (wake it to bring Wi-Fi back)..."
+echo "waiting for the watch to reattach..."
+echo "  wake it, and open Settings > Developer options > Wireless debugging"
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   if D=$(find_endpoint); then
     echo "WATCH BACK: $D"
