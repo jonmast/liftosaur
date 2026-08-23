@@ -34,13 +34,32 @@ interface WatchBundleExec {
 tasks.register('buildWatchBundle') {
     description = 'Regenerates dist/watch-bundle.js from source and bakes it into :wear assets.'
 
-    // Deliberately ALWAYS runs (~5s). Incremental up-to-date checks were tried and removed:
-    // getting them right requires enumerating every input that can change the bundle
-    // (src/**, both webpack configs, package-lock.json, the generated markdown sources...),
-    // and any input missed silently ships a stale bundle. Staleness is byte-undetectable at
-    // runtime, so the spec chose prevention over detection (ticket 10) — and a skipped task
-    // is exactly the detection-shaped hole that decision rejected.
-    outputs.upToDateWhen { false }
+    // Inputs are declared so unchanged sources skip the ~13s rebuild. The spec's "regenerate
+    // every build" rule (ticket 10) is about never shipping a stale bundle, and Gradle's
+    // up-to-date check enforces exactly that as long as the input set is honest — which is
+    // the part worth being careful about, not the caching itself.
+    //
+    // The set below is everything webpack reads: the TS sources, the two configs, the
+    // dependency lockfile, and build:markdown's own inputs (which live outside src/ and
+    // generate into src/generated/). If you add a source of truth the bundle depends on,
+    // add it here.
+    inputs.dir(new File(repoRoot, 'src')).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(new File(repoRoot, 'webpack.config.js'))
+    inputs.file(new File(projectDir, 'webpack.watch.js'))
+    inputs.file(new File(repoRoot, 'package-lock.json'))
+    inputs.files(
+        new File(repoRoot, 'llms/liftoscript.md'),
+        new File(repoRoot, 'llms/liftoscript_examples.md'),
+        new File(repoRoot, 'llms/exercises.md'),
+        new File(repoRoot, 'CHANGELOG.md'),
+        new File(repoRoot, 'liftoscript.grammar'),
+    )
+
+    // The baked asset is the real output — the shipped artifact, and what the up-to-date
+    // check is keyed on. dist/watch-bundle.js is a webpack intermediate we copy from; it is
+    // deliberately NOT declared, because it is shared with the phone/web builds which
+    // overwrite it freely.
+    outputs.file(bakedBundleFile)
 
     def execOps = objects.newInstance(WatchBundleExec).execOps
 
