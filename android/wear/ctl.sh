@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Drive the prototype's variants over adb, so the 192dp screen doesn't have to be poked.
+# Drive the app over adb, so the 192dp screen doesn't have to be poked to reach a screen.
 #
-#   ./ctl.sh detail hero|anchored|row     switch the exercise-detail layout
-#   ./ctl.sh prompt paged|form            switch the set-completion prompt layout
-#   ./ctl.sh worst 0|1                    one-field vs five-field worst case
-#   ./ctl.sh screen home|exercises|detail|prompt|variants
-#   ./ctl.sh entry 0|1|2                  which exercise detail opens (0=Row,1=Bench,2=Squat)
-#   ./ctl.sh reset                        restore the stub workout
+#   ./ctl.sh screen home|exercises|detail|engine
+#   ./ctl.sh entry 0|1|2                  which exercise detail opens
+#   ./ctl.sh reseed                       reset to the bundled fixture storage (debug only)
 #
-# Combine freely:  ./ctl.sh detail row entry 1 screen detail
+# Combine freely:  ./ctl.sh reseed entry 1 screen detail
+#
+# Why this exists: screenshots of this app are impossible (the doze dream composites above
+# our window, and uiautomator sees no Compose nodes), so every visual check is a human
+# looking at their wrist. Reaching the screen under review must not also be manual.
 set -euo pipefail
 
 WATCH="${WATCH:-$("$(dirname "$0")/watch-serial.sh")}"
@@ -16,15 +17,15 @@ PKG=com.liftosaur.www.fork
 RECEIVER="$PKG/com.liftosaur.wear.RemoteReceiver"
 
 if [ $# -eq 0 ]; then
-  sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
   exit 0
 fi
 
 args=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    reset) args+=(--es reset 1); shift ;;
-    detail|prompt|worst|screen|entry)
+    reseed) args+=(--es reseed 1); shift ;;
+    screen|entry)
       [ $# -ge 2 ] || { echo "error: $1 needs a value" >&2; exit 1; }
       args+=(--es "$1" "$2"); shift 2 ;;
     *) echo "error: unknown option '$1'" >&2; exit 1 ;;

@@ -2,6 +2,7 @@ package com.liftosaur.wear
 
 import androidx.compose.ui.graphics.Color
 import androidx.wear.compose.material3.ColorScheme
+import com.liftosaur.wear.engine.WatchSetStatus
 
 object LiftosaurColor {
     val purple500 = Color(0xFF8356F6)
@@ -46,12 +47,12 @@ object LiftosaurColor {
     val borderNeutral = lightgray700
 }
 
-fun statusColor(status: SetStatus, isWarmup: Boolean): Color {
+fun statusColor(status: WatchSetStatus, isWarmup: Boolean): Color {
     val base = when (status) {
-        SetStatus.SUCCESS -> LiftosaurColor.green400
-        SetStatus.IN_RANGE -> LiftosaurColor.yellow600
-        SetStatus.FAILED -> LiftosaurColor.red400
-        SetStatus.NOT_FINISHED -> LiftosaurColor.neutralGray.copy(alpha = 0.5f)
+        WatchSetStatus.SUCCESS -> LiftosaurColor.green400
+        WatchSetStatus.IN_RANGE -> LiftosaurColor.yellow600
+        WatchSetStatus.FAILED -> LiftosaurColor.red400
+        WatchSetStatus.NOT_FINISHED -> LiftosaurColor.neutralGray.copy(alpha = 0.5f)
     }
     return if (isWarmup) base.copy(alpha = base.alpha * 0.5f) else base
 }
