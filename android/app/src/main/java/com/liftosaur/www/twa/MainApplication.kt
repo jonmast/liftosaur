@@ -20,6 +20,7 @@ import com.liftosaur.www.twa.lftupdater.LftUpdaterPath
 import com.liftosaur.www.twa.liveactivity.LiftosaurLiveActivityPackage
 import com.liftosaur.www.twa.share.LiftosaurSharePackage
 import com.liftosaur.www.twa.timer.LiftosaurTimerPackage
+import com.liftosaur.www.twa.wear.LiftosaurWatchPackage
 import com.rollbar.RollbarReactNative
 
 class MainApplication : Application(), ReactApplication {
@@ -37,6 +38,9 @@ class MainApplication : Application(), ReactApplication {
           add(FastTextPackage())
           add(LiftoEditorPackage())
           add(LiftosaurImageResizerPackage())
+          // Appended at the end deliberately: the fork's only addition to this list, so a
+          // rebase onto upstream conflicts on one line at the bottom rather than in the middle.
+          add(LiftosaurWatchPackage())
         },
       jsMainModulePath = "index",
       jsBundleFilePath = if (BuildConfig.DISABLE_OTA) null else LftUpdaterPath.effectiveBundleFilePath(this),

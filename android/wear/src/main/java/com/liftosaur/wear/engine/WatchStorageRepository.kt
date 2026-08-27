@@ -39,6 +39,20 @@ class WatchStorageRepository(private val context: Context) {
     /** The current storage, or null before [load] or when the phone has never synced. */
     val storage: StateFlow<ByteArray?> = _storage.asStateFlow()
 
+    private val _externalRevision = MutableStateFlow(0)
+
+    /**
+     * Bumped on every write that did **not** come from a UI-driven mutation — the phone's
+     * inbound DataItem, a migration, a wipe.
+     *
+     * The UI can't just observe [storage]: mutations write it too, and those already end in a
+     * refresh, so observing storage directly would re-derive the whole screen twice per tap
+     * (~45ms of engine calls). This counter is the "something changed underneath you" signal,
+     * and it is the only thing that makes a phone-side edit visible while the watch screen is
+     * open.
+     */
+    val externalRevision: StateFlow<Int> = _externalRevision.asStateFlow()
+
     /**
      * True when the bundle's module-scope cache may not match [_storage].
      *
@@ -115,6 +129,24 @@ class WatchStorageRepository(private val context: Context) {
         _storage.value = bytes
         cacheDirty = true
         persist(bytes)
+        _externalRevision.value += 1
+    }
+
+    /**
+     * Wipes local storage — memory, disk, and the bundle's cache.
+     *
+     * Called only on an `accountEpoch` change (spec §2.5): the incoming storage belongs to a
+     * different account, and merging it with what is here would fuse two people's data into a
+     * single `_versions` clock that no later sync could pull apart. Deleting first is what
+     * makes the account switch a replacement rather than a merge.
+     */
+    fun clear() {
+        _storage.value = null
+        cacheDirty = true
+        if (file.exists() && !file.delete()) {
+            Log.e(TAG, "could not delete persisted storage")
+        }
+        _externalRevision.value += 1
     }
 
     /** In-memory only, for tests that want to prove what the cache invariant is protecting. */

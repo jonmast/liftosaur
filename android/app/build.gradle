@@ -167,6 +167,16 @@ dependencies {
     implementation 'androidx.exifinterface:exifinterface:1.3.3'
     implementation 'io.github.Rosemoe.sora-editor:editor:0.23.6'
 
+    // Data Layer (phone <-> Wear). Version pinned identically in android/wear/build.gradle --
+    // both ends speak the same DataItem format, and a version skew between them is the kind of
+    // failure that shows up as "the put silently never arrives".
+    implementation 'com.google.android.gms:play-services-wearable:19.0.0'
+
+    // JVM tests for the payload logic. android.jar's org.json is a stub that throws on every
+    // call, so unit tests need a real implementation on the test classpath ahead of it.
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
+
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")
     } else {

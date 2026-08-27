@@ -25,5 +25,20 @@
         <receiver
             android:name=".RemoteReceiver"
             android:exported="true" />
+
+        <!--
+          Started by the system to deliver the phone's /storage DataItem, with the app process
+          dead if need be. The intent filter is scheme-matched on the path prefix so this app is
+          never woken for other apps' items.
+        -->
+        <service
+            android:name=".sync.PhoneStorageListenerService"
+            android:exported="true"
+            android:permission="com.google.android.gms.permission.BIND_WEARABLE_LISTENER">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/storage" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

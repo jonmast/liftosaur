@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Declares this app to the phone via CapabilityClient. It is what makes the phone's
+      isWatchAppInstalled()/isWatchReachable() answerable at all - without it the phone can see
+      a connected *node* but cannot tell whether our app is on it.
+      Keep in sync with WearProtocol.CAPABILITY_WEAR_APP on both sides.
+    -->
+    <string-array name="android_wear_capabilities">
+        <item>liftosaur_wear_app</item>
+    </string-array>
+</resources>

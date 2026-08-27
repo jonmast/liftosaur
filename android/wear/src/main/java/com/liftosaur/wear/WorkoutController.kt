@@ -8,11 +8,13 @@ import com.liftosaur.wear.engine.WatchAmrapModal
 import com.liftosaur.wear.engine.WatchJs
 import com.liftosaur.wear.engine.WatchStorageRepository
 import com.liftosaur.wear.engine.WatchWorkout
+import com.liftosaur.wear.sync.PhoneStorageSync
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.liftosaur.wear.engine.EngineDispatcher
@@ -84,11 +86,39 @@ class WorkoutController(
         scope.launch {
             withContext(EngineDispatcher.dispatcher) { LiftosaurEngine.initialize(context) }
             val hasStorage = repository.load() || seedFixtureIfDebug()
+            observeExternalStorage()
+            // Catch up on a phone put this app was not alive for (onDataChanged fires once).
+            // Launched rather than awaited so the UI paints from disk instead of waiting on the
+            // radio; when it lands it arrives through observeExternalStorage like any other
+            // external change.
+            scope.launch { PhoneStorageSync.applyLatest(context) }
             if (!hasStorage) {
                 _state.value = WorkoutUiState(loading = false, empty = true)
                 return@launch
             }
             refresh()
+        }
+    }
+
+    /**
+     * Follows storage that was written from outside the UI — the phone's `/storage` DataItem,
+     * applied by `PhoneStorageListenerService` while this screen is open.
+     *
+     * Started before the empty-state early return on purpose: the very first phone sync arrives
+     * *into* the empty state, and a collector started only on the has-storage path would leave
+     * a freshly-paired watch showing "no program" until it was relaunched.
+     *
+     * Skipping while a mutation is in flight is not a dropped update — [mutation] refreshes
+     * unconditionally when it finishes, and that refresh reads whatever storage is current by
+     * then.
+     */
+    private fun observeExternalStorage() {
+        scope.launch {
+            repository.externalRevision.drop(1).collect {
+                if (mutationJob?.isActive == true) return@collect
+                Log.i(TAG, "external storage change, re-deriving UI")
+                refresh()
+            }
         }
     }
 
