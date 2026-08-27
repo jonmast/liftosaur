@@ -125,5 +125,23 @@
           <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
         </intent-filter>
       </activity-alias>
+      <!--
+        Fork addition, appended last on purpose: this is a shared file, and everything upstream
+        adds goes above, so a rebase sees an append rather than an interleave.
+
+        Started by the system to deliver the watch's /watch/storage DataItem with this app
+        backgrounded or its process dead - which is the whole point, since a workout is logged
+        on the wrist precisely while the phone is in a pocket. Path-prefixed so this app is
+        never woken for other items, notably not for its own /storage puts.
+      -->
+      <service
+        android:name=".wear.WatchStorageListenerService"
+        android:exported="true"
+        android:permission="com.google.android.gms.permission.BIND_WEARABLE_LISTENER">
+        <intent-filter>
+          <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />
+          <data android:scheme="wear" android:host="*" android:pathPrefix="/watch/storage" />
+        </intent-filter>
+      </service>
     </application>
 </manifest>
