@@ -5,6 +5,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.liftosaur.wear.engine.EngineDispatcher
 import com.liftosaur.wear.engine.LiftosaurEngine
 import com.liftosaur.wear.engine.WatchStorageRepository
+import com.liftosaur.wear.sync.PhoneStorageSync
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -361,5 +362,58 @@ class WorkoutControllerTest {
             "and the one that landed must be the first",
             state.progress!!.exercises[0].sets[first.pos].isCompleted,
         )
+    }
+
+    // -------------------------------------------------------------------------------------
+    // The phone ending the workout (spec §2.5, ticket 06)
+    // -------------------------------------------------------------------------------------
+
+    /**
+     * Finish or discard on the phone sends the wrist back Home, without any JS running.
+     *
+     * The merge that follows would usually clear `progress` and produce the same navigation —
+     * but only if it succeeds. A merge that fails keeps local storage on purpose (it is
+     * protecting sets logged on the wrist), and without this edge the watch would sit on a
+     * workout the phone has already finished.
+     */
+    @Test
+    fun thePhoneEndingTheWorkoutBumpsTheEndedNonce() {
+        PhoneStorageSync.publishPhoneActiveWorkoutStartTime(null)
+        seed("fixture-storage.json")
+        startWorkout()
+        val before = controller.state.value.endedNonce
+
+        PhoneStorageSync.publishPhoneActiveWorkoutStartTime(1_700_000_000_000)
+        PhoneStorageSync.publishPhoneActiveWorkoutStartTime(null)
+
+        val ended = runBlocking {
+            withTimeout(10_000) { controller.state.first { it.endedNonce > before } }
+        }
+        assertEquals(before + 1, ended.endedNonce)
+    }
+
+    /**
+     * A workout started on the wrist is not cancelled by the phone's silence.
+     *
+     * The phone's header says "no workout" for a full round trip after the watch starts one —
+     * it does not know yet. Treating that as state rather than as an edge would throw the user
+     * out of the workout they just started, every time.
+     */
+    @Test
+    fun aPhoneHeaderThatWasAlreadyEmptyDoesNotEndAWatchStartedWorkout() {
+        PhoneStorageSync.publishPhoneActiveWorkoutStartTime(null)
+        seed("fixture-storage.json")
+        startWorkout()
+        val before = controller.state.value.endedNonce
+
+        PhoneStorageSync.publishPhoneActiveWorkoutStartTime(null)
+        Thread.sleep(500)
+
+        assertEquals(
+            "null → null is not an edge and must not end the workout",
+            before,
+            controller.state.value.endedNonce,
+        )
+        assertTrue("the watch-started workout must still be active", controller.state.value.isWorkoutActive)
     }
 }

@@ -12,6 +12,9 @@ import com.liftosaur.wear.engine.EngineDispatcher
 import com.liftosaur.wear.engine.LiftosaurEngine
 import com.liftosaur.wear.engine.WatchJs
 import com.liftosaur.wear.engine.WatchStorageRepository
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
 import java.util.concurrent.TimeUnit
@@ -31,6 +34,34 @@ object PhoneStorageSync {
     private const val PREFS = "wear-sync"
     private const val KEY_APPLIED_EPOCH = "appliedAccountEpoch"
     private const val READ_TIMEOUT_SECONDS = 10L
+
+    private val _phoneActiveWorkoutStartTime = MutableStateFlow<Long?>(null)
+
+    /**
+     * The phone's `activeWorkoutStartTime`, as of the last applied `/storage` (spec §2.5).
+     *
+     * Published straight off the plaintext header, before any merge runs, so the watch can
+     * react to the phone finishing or discarding a workout **with zero JS on the path** — no
+     * gunzip, no `JSON.parse`, no bundle call. The merge answers the same question a few
+     * hundred milliseconds later and would usually be enough; this exists for the cases where
+     * it isn't — a merge that fails keeps local storage, which would leave the wrist showing a
+     * workout the phone has already ended.
+     *
+     * Null-to-non-null carries no meaning here: a workout the *watch* started is active long
+     * before the phone has merged it and put a header saying so.
+     */
+    val phoneActiveWorkoutStartTime: StateFlow<Long?> = _phoneActiveWorkoutStartTime.asStateFlow()
+
+    /**
+     * Publishes a header value without a DataItem — for tests only.
+     *
+     * The alternative is driving [apply] with a synthetic payload, which pulls in the process
+     * -wide [AppContainer] repository and the engine, and would test the merge rather than the
+     * signal.
+     */
+    internal fun publishPhoneActiveWorkoutStartTime(value: Long?) {
+        _phoneActiveWorkoutStartTime.value = value
+    }
 
     /** The parsed DataItem: the header stays plaintext so this costs no JS. */
     data class Payload(
@@ -70,6 +101,10 @@ object PhoneStorageSync {
      * Must run off the main thread; the JS calls inside are dispatched to the engine thread.
      */
     suspend fun apply(context: Context, payload: Payload) {
+        // First, and outside the try/merge path: this is the zero-JS signal, and it is most
+        // useful exactly when the expensive part below fails.
+        _phoneActiveWorkoutStartTime.value = payload.activeWorkoutStartTime
+
         val repository = AppContainer.repository(context)
         withContext(EngineDispatcher.dispatcher) { LiftosaurEngine.initialize(context) }
 

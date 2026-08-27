@@ -103,9 +103,22 @@ class LiftosaurWatchModule(reactContext: ReactApplicationContext) :
 
     override fun isWatchReachable(): Boolean = nodes.isReachable()
 
-    /** Drains events that arrived before JS subscribed — see [WatchEventDispatcher]. */
+    /**
+     * Drains events that arrived before JS subscribed — see [WatchEventDispatcher] — and then
+     * catches up on watch storage this process never saw at all.
+     *
+     * The buffer only covers events *this process* received. A phone killed while the watch was
+     * logging sets has no buffer to replay, and the watch will not put again until its next
+     * mutation, so the sets would sit in the Data Layer unnoticed until the user's next workout.
+     * The catch-up read is what closes that, and it is the exact mirror of the watch's
+     * `PhoneStorageSync.applyLatest` (ticket 05). Off-thread: Data Layer reads block.
+     */
     override fun flushPendingEvents(promise: Promise) {
         WatchEventDispatcher.flushPending()
+        val appContext = reactApplicationContext.applicationContext
+        Thread({ WatchStorageReceiver.deliverLatest(appContext) }, "wear-storage-catchup").apply {
+            isDaemon = true
+        }.start()
         promise.resolve(null)
     }
 

@@ -48,6 +48,14 @@ data class WorkoutUiState(
      * yank the user past Home on every launch.
      */
     val startedNonce: Int = 0,
+    /**
+     * Bumped when the *phone* ended the workout, so the UI can leave the workout screens.
+     *
+     * Separate from [isWorkoutActive] going false because it is derived from the phone's
+     * plaintext header rather than from merged storage: it fires even when the merge that
+     * would also have cleared [progress] failed or has not run yet (spec §2.5).
+     */
+    val endedNonce: Int = 0,
 ) {
     val workout: WatchWorkout? get() = progress ?: next
     val isWorkoutActive: Boolean get() = progress != null
@@ -87,6 +95,7 @@ class WorkoutController(
             withContext(EngineDispatcher.dispatcher) { LiftosaurEngine.initialize(context) }
             val hasStorage = repository.load() || seedFixtureIfDebug()
             observeExternalStorage()
+            observePhoneWorkoutEnd()
             // Catch up on a phone put this app was not alive for (onDataChanged fires once).
             // Launched rather than awaited so the UI paints from disk instead of waiting on the
             // radio; when it lands it arrives through observeExternalStorage like any other
@@ -144,6 +153,29 @@ class WorkoutController(
     }
 
     /**
+     * Follows the phone's `activeWorkoutStartTime` disappearing — finish or discard, on the
+     * phone, while this app is open.
+     *
+     * Only the non-null → null edge means anything. A workout started *on the wrist* is active
+     * for a full round trip before the phone's header mentions it, so treating "the phone says
+     * no workout" as state rather than as an edge would throw the user out of the workout they
+     * just started.
+     */
+    private fun observePhoneWorkoutEnd() {
+        scope.launch {
+            var previous = PhoneStorageSync.phoneActiveWorkoutStartTime.value
+            PhoneStorageSync.phoneActiveWorkoutStartTime.collect { current ->
+                val ended = previous != null && current == null
+                previous = current
+                if (ended) {
+                    Log.i(TAG, "phone ended the workout")
+                    _state.value = _state.value.copy(endedNonce = _state.value.endedNonce + 1)
+                }
+            }
+        }
+    }
+
+    /**
      * Re-reads everything the UI shows from storage.
      *
      * Three reads rather than a cached projection: they are ~15ms warm, and the alternative —
@@ -178,6 +210,7 @@ class WorkoutController(
             error = errorOverride ?: (progress as? WatchJs.CallResult.Failure)?.error,
             empty = false,
             startedNonce = _state.value.startedNonce + startedNonceBump,
+            endedNonce = _state.value.endedNonce,
         )
     }
 

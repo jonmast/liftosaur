@@ -221,6 +221,71 @@ class WatchStorageRepositoryTest {
     }
 
     // -------------------------------------------------------------------------------------
+    // The watch→phone announcement (spec §2.5, ticket 06)
+    // -------------------------------------------------------------------------------------
+
+    /**
+     * Every successful mutation announces the storage it produced.
+     *
+     * This is the whole watch→phone loop's trigger: a mutation that does not announce is a set
+     * that exists only on the wrist until the user's *next* set, and the last set of a workout
+     * would never reach the phone at all.
+     */
+    @Test
+    fun successfulMutationsAnnounceTheStorageTheyProduced() = runBlocking {
+        val announced = mutableListOf<ByteArray>()
+        repo.onMutationCommitted = { announced.add(it) }
+
+        repo.setExternal(started)
+        val result = repo.mutate { storage, deviceId ->
+            WatchJs.setCurrentEntryIndex(storage, deviceId, 1)
+        }
+
+        assertTrue("mutation failed: $result", result is WatchJs.MutationResult.Success)
+        assertEquals("exactly one announcement per mutation", 1, announced.size)
+        assertArrayEquals(
+            "the announced bytes must be the storage that was persisted",
+            repo.storage.value,
+            announced[0],
+        )
+    }
+
+    /**
+     * Storage that came *from* the phone is never announced back.
+     *
+     * The echo would not merely be wasteful: the phone merges what it receives, and a merge
+     * that changes anything triggers its own put back to the watch. Two devices each announcing
+     * what the other just sent is a loop with a radio in it, and the only thing that breaks it
+     * is this asymmetry — the watch announces only what it authored.
+     */
+    @Test
+    fun externalWritesAreNeverAnnounced() = runBlocking {
+        val announced = mutableListOf<ByteArray>()
+        repo.onMutationCommitted = { announced.add(it) }
+
+        repo.setExternal(started)
+        repo.setExternal(fixture)
+        repo.clear()
+        WatchStorageRepository(context).also { it.onMutationCommitted = { b -> announced.add(b) } }.load()
+
+        assertEquals("external writes must not announce anything", 0, announced.size)
+    }
+
+    @Test
+    fun aFailedMutationAnnouncesNothing() = runBlocking {
+        val announced = mutableListOf<ByteArray>()
+        repo.onMutationCommitted = { announced.add(it) }
+
+        // No active workout, so finishWorkout fails — and the phone must not be told that
+        // storage changed when it did not.
+        repo.setExternal(fixture)
+        val result = repo.mutate { storage, deviceId -> WatchJs.finishWorkout(storage, deviceId) }
+
+        assertTrue("expected a failure, got: $result", result is WatchJs.MutationResult.Failure)
+        assertEquals(0, announced.size)
+    }
+
+    // -------------------------------------------------------------------------------------
     // deviceId (spec §2.4)
     // -------------------------------------------------------------------------------------
 

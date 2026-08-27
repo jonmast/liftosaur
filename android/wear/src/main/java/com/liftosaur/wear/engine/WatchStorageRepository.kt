@@ -92,6 +92,22 @@ class WatchStorageRepository(private val context: Context) {
     }
 
     /**
+     * Notified after a mutation has been persisted — the watch→phone put (spec §2.5).
+     *
+     * A callback rather than a direct dependency on the sync package, because this class must
+     * stay constructible without Google Play services (the instrumentation tests construct it
+     * directly), and because the direction of the dependency matters: the repository owns
+     * storage and knows nothing about the Data Layer.
+     *
+     * **Only mutations fire this, never [setExternal].** External writes are storage that came
+     * *from* the phone; putting them back would be an echo, and the phone would merge the echo,
+     * change, and put again — a loop with a radio in it. What breaks the loop is that the watch
+     * only ever announces changes it authored itself.
+     */
+    @Volatile
+    var onMutationCommitted: ((ByteArray) -> Unit)? = null
+
+    /**
      * Loads the last-persisted storage from disk. Call once at startup.
      *
      * This is an external write by definition — the engine in a freshly started process has
@@ -182,6 +198,9 @@ class WatchStorageRepository(private val context: Context) {
             // calls 15ms instead of 200ms, on every single mutation.
             _storage.value = result.storage
             persist(result.storage)
+            // After persisting, so that a process killed between the put and the write cannot
+            // leave the phone holding a set the watch has forgotten.
+            onMutationCommitted?.invoke(result.storage)
         }
         return result
     }

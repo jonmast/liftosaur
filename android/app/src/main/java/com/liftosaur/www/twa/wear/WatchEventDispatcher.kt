@@ -47,6 +47,18 @@ object WatchEventDispatcher {
         )
     }
 
+    /**
+     * Emits `endWorkout` — the workout ended on the watch (ticket 06).
+     *
+     * JS treats this as "clean up native workout state", not as a storage change: the storage
+     * half already arrived as a merge. Idempotent on the JS side, which matters because a
+     * replayed buffer can deliver it twice.
+     */
+    @Synchronized
+    fun emitEndWorkout() {
+        emit(Arguments.createMap().apply { putString("type", "endWorkout") })
+    }
+
     @Synchronized
     private fun emit(event: WritableMap) {
         val m = module

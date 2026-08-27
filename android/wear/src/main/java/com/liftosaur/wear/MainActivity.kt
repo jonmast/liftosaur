@@ -72,6 +72,17 @@ fun WearApp() {
             }
         }
 
+        // The phone finished or discarded the workout. This is the header-derived edge, which
+        // arrives before (and independently of) the merge that clears `progress` — so the wrist
+        // leaves the workout even when that merge fails.
+        LaunchedEffect(state.endedNonce) {
+            if (state.endedNonce == 0) return@LaunchedEffect
+            navController.popBackStack(Routes.HOME, inclusive = false)
+        }
+
+        // The mirror image of the phone's `forceUpdateEntryIndex` (`src/ducks/thunks.ts`):
+        // `currentEntryIndex` version-merges across devices, so an exercise advanced on the
+        // phone lands here as a storage change, and the open detail screen must follow it.
         LaunchedEffect(state.progress?.currentEntryIndex) {
             state.progress?.currentEntryIndex?.let { openEntryIndex = it }
         }

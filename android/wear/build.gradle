@@ -190,6 +190,16 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+
+    testOptions {
+        unitTests {
+            // android.jar's stubs throw on every call. The JVM tests here cover the outbound
+            // payload and the put coalescing, neither of which is about Android behaviour --
+            // but both log, and a "Method e in android.util.Log not mocked" failure would be
+            // noise about the wrong thing.
+            returnDefaultValues = true
+        }
+    }
 }
 
 // Build identity is a GENERATED SOURCE, not a buildConfigField.
@@ -272,6 +282,13 @@ dependencies {
     // Data Layer (phone <-> Wear). Version pinned identically in android/app/build.gradle.
     implementation 'com.google.android.gms:play-services-wearable:19.0.0'
     debugImplementation 'androidx.wear.compose:compose-ui-tooling:1.6.2'
+
+    // The watch→phone payload and the put coalescing are pure logic, and their failures are
+    // silent on-device (a header field that reads wrong, a coalesced put that ships the older
+    // storage). org.json in android.jar is a stub that throws, so a real one goes on the test
+    // classpath ahead of it — same arrangement as :app.
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
 
     // The correctness tests (spec §4) run on the watch, not on the JVM: they exercise the
     // real bundle in the real engine on the real 32-bit ABI, which is the only place the
