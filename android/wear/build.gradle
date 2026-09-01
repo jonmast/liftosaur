@@ -23,6 +23,21 @@ repositories {
     mavenCentral()
 }
 
+// The SAME file :app loads, deliberately (spec §3.2). Google Play services will only route
+// Data Layer traffic between two installs that share BOTH a package name and a signing
+// certificate. The package name is asserted at startup against `phoneApplicationId` below;
+// this is the other half, and it is the half that fails silently — a signature mismatch does
+// not throw, log, or surface anywhere: DataItems are simply never delivered, which is
+// indistinguishable from a watch that is merely disconnected.
+//
+// Duplicating the block rather than hoisting it into a shared file is the ticket 05 shared-
+// file budget again: wear/build.gradle is fork-only, so this costs nothing on rebase.
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
 // The phone app's applicationId. Duplicated here as a literal rather than hoisted into a
 // shared config, because hoisting would spend shared-file budget (ticket 05). The startup
 // assertion in LiftosaurWearApp compares against this: if the two ever diverge, the Wear
@@ -175,14 +190,43 @@ android {
         noCompress += 'js'
     }
 
+    // Mirrors :app/build.gradle exactly. Both modules read the one local keystore.properties,
+    // so the two APKs cannot disagree about their signing identity (spec §3.2).
+    signingConfigs {
+        debug {
+            if (keystoreProperties['storeFile']) {
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+            // No else branch, unlike :app. :app can fall back to a repo-local debug.keystore
+            // because a phone build that talks to nothing is still a usable app; a watch build
+            // signed with a different key than the phone is not — it installs, launches, and
+            // then never receives a single DataItem. Falling back here would trade a loud
+            // configuration error for a silent runtime one, so :wear inherits AGP's default
+            // debug keystore only when there is no keystore.properties at all, in which case
+            // :app is using its own fallback and neither side is talking to the other anyway.
+        }
+        release {
+            if (keystoreProperties['storeFile']) {
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+        }
+    }
+
     buildTypes {
         // Compose debug builds carry composition tracking and run non-optimized, so scroll
         // jank measured on `debug` is not evidence about the real thing. This type is for
-        // judging feel on-device; it signs with the debug key so it still sideloads.
+        // judging feel on-device; it is signed with the fork key (not a stock debug key) so
+        // that it both sideloads and can actually reach the phone over the Data Layer.
         release {
             debuggable false
             minifyEnabled false
-            signingConfig signingConfigs.debug
+            signingConfig keystoreProperties['storeFile'] ? signingConfigs.release : signingConfigs.debug
         }
     }
 
