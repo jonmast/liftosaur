@@ -39,12 +39,63 @@ object LiftosaurEngine {
         get() = initialized
 
     /**
+     * What the cold start actually cost, recorded where it actually happened.
+     *
+     * **This is recorded in situ rather than re-measured on demand, and that is the whole
+     * point.** Until ticket 04 there was exactly one thing that initialized the engine — the
+     * engine screen — so a self-test could open with a stopwatch and get a real number. Now
+     * `WorkoutController.start()` initializes at app launch, so any later attempt to *measure*
+     * a cold start times an idempotent early return and reports something close to zero. That
+     * would not look like a broken measurement; it would look like a build comfortably inside
+     * its 1.5s budget, which is the worst way for evidence to fail (spec §4, ticket 07).
+     */
+    data class ColdStart(
+        /** CPU ms for asset read + prelude + bundle eval + post-eval GC. -1 before init. */
+        val initCpuMs: Double,
+        /** CPU ms for the first real call. -1 until one has been made. */
+        val firstCallCpuMs: Double,
+        /** Anon RSS growth across init, KB. The engine's standing cost. */
+        val initAnonKb: Long,
+        /** What the budget is stated against: init + first call. */
+        val totalCpuMs: Double,
+        val method: String?,
+    )
+
+    @Volatile
+    private var initCpuNanos = -1L
+
+    @Volatile
+    private var initAnonKb = -1L
+
+    @Volatile
+    private var firstCallCpuNanos = -1L
+
+    @Volatile
+    private var firstCallMethod: String? = null
+
+    val coldStart: ColdStart
+        get() = ColdStart(
+            initCpuMs = if (initCpuNanos < 0) -1.0 else CpuTime.msOf(initCpuNanos),
+            firstCallCpuMs = if (firstCallCpuNanos < 0) -1.0 else CpuTime.msOf(firstCallCpuNanos),
+            initAnonKb = initAnonKb,
+            totalCpuMs = if (initCpuNanos < 0 || firstCallCpuNanos < 0) {
+                -1.0
+            } else {
+                CpuTime.msOf(initCpuNanos + firstCallCpuNanos)
+            },
+            method = firstCallMethod,
+        )
+
+    /**
      * Evaluates the prelude and the baked bundle. Idempotent.
      *
      * @throws RuntimeException with the JS exception text if either fails to evaluate.
      */
     fun initialize(context: Context, memoryLimitBytes: Long = MEMORY_LIMIT_BYTES) {
         if (initialized) return
+
+        val anonBefore = CpuTime.anonRssKb()
+        val cpu0 = CpuTime.nanos()
 
         val prelude = context.assets.open("prelude.js").use { it.readBytes() }
         val bundle = readBakedBundle(context)
@@ -53,6 +104,10 @@ object LiftosaurEngine {
         val ok = nativeInit(prelude, bundle, memoryLimitBytes)
         if (!ok) throw IllegalStateException("engine init returned false without throwing")
         initialized = true
+
+        initCpuNanos = CpuTime.nanos() - cpu0
+        initAnonKb = CpuTime.anonRssKb() - anonBefore
+        Log.i(TAG, "initialized in ${CpuTime.msOf(initCpuNanos)}ms CPU, +${initAnonKb}KB anon")
     }
 
     /**
@@ -97,6 +152,21 @@ object LiftosaurEngine {
         extraArgsJson: String? = null,
     ): ByteArray {
         check(initialized) { "engine not initialized" }
+        // The first call is part of the cold start — an engine that evaluates but cannot answer
+        // is not a working engine — and it is the expensive one, because the bundle parses and
+        // validates storage for the first time here. Timing it has to happen wherever it lands,
+        // which is nearly always WorkoutController's opening getProgress rather than any
+        // measurement code.
+        if (firstCallCpuNanos < 0L) {
+            val cpu0 = CpuTime.nanos()
+            try {
+                return nativeCall(method, storage, storage2, extraArgsJson)
+            } finally {
+                firstCallCpuNanos = CpuTime.nanos() - cpu0
+                firstCallMethod = method
+                Log.i(TAG, "first call ($method) ${CpuTime.msOf(firstCallCpuNanos)}ms CPU")
+            }
+        }
         return nativeCall(method, storage, storage2, extraArgsJson)
     }
 

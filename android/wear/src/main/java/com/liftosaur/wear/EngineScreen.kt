@@ -36,12 +36,22 @@ import kotlinx.coroutines.withContext
 fun EngineScreen() {
     val context = LocalContext.current
     var result by remember { mutableStateOf<EngineSelfTest.Result?>(null) }
+    var bench by remember { mutableStateOf<PreShipBench.Result?>(null) }
     var running by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
+        val repository = AppContainer.repository(context)
         // Every engine touch happens on the engine thread — it owns the runtime and context
         // for the process lifetime, and nothing else may enter them.
-        result = withContext(EngineDispatcher.dispatcher) { EngineSelfTest.run(context) }
+        //
+        // The self-test is given the app's *real* storage rather than the bundled fixture: the
+        // fixture is one contrived 34KB program, and every number that turned out to matter is
+        // a function of the account's actual size (ticket 07).
+        result = withContext(EngineDispatcher.dispatcher) {
+            EngineSelfTest.run(context, repository.storage.value)
+        }
+        // The full spec §4 table — a whole simulated workout, none of it persisted or sent.
+        bench = PreShipBench.run(repository)
         running = false
     }
 
@@ -71,20 +81,15 @@ fun EngineScreen() {
 
         Row2("bundle", r.bundleSha)
         Row2("commit", r.commitHash)
-        Row2("cold", "${r.coldStartCpuMs}ms", budgetOk = r.coldStartCpuMs in 0..1500)
-        Row2("warm", "${r.warmCallCpuMs}ms", budgetOk = r.warmCallCpuMs in 0..50)
-        Row2("anon", "${r.engineInitAnonKb}KB", budgetOk = r.engineInitAnonKb in 0..8192)
-        Row2("malloc", "${r.mallocSizeBytes / 1024}KB")
         Row2(
-            "call",
-            if (r.firstCallOk) "OK" else "FAIL",
-            budgetOk = r.firstCallOk,
+            "data",
+            "${r.storageBytes / 1024}KB ${if (r.usedRealStorage) "real" else "fixture"}",
+            // A fixture-based run is not evidence about this account — flagged rather than
+            // silently reported as if it were (ticket 07).
+            budgetOk = r.usedRealStorage,
         )
-        Row2(
-            "oom",
-            if (r.memoryLimitTripOk) "clean" else "FAIL",
-            budgetOk = r.memoryLimitTripOk,
-        )
+        Row2("call", if (r.firstCallOk) "OK" else "FAIL", budgetOk = r.firstCallOk)
+        Row2("oom", if (r.memoryLimitTripOk) "clean" else "FAIL", budgetOk = r.memoryLimitTripOk)
 
         r.failure?.let {
             Text(
@@ -95,8 +100,42 @@ fun EngineScreen() {
                 fontSize = 10.sp,
             )
         }
+
+        val b = bench
+        if (b == null) {
+            Text(
+                text = "benchmarking…",
+                style = MaterialTheme.typography.bodySmall,
+                color = LiftosaurColor.textSecondary,
+                fontSize = 10.sp,
+            )
+            return@Column
+        }
+
+        Row2("cold", "${b.coldStart.totalCpuMs.round1()}ms", budgetOk = b.coldStartOk)
+        Row2("warm", "${b.warmReadMedianMs.round1()}ms", budgetOk = b.warmReadOk)
+        Row2("mutate", "${b.mutationMedianMs.round1()}ms", budgetOk = b.mutationOk)
+        Row2("prompt", "${b.promptInteractionMs.round1()}ms")
+        Row2("put", "${b.outboundBuildMedianMs.round1()}ms")
+        Row2("anon", "${b.coldStart.initAnonKb}KB", budgetOk = b.engineAnonOk)
+        Row2("peak", "${b.sessionPeakAnonKb / 1024}MB", budgetOk = b.sessionAnonOk)
+        Row2("malloc", if (b.mallocTrendOk) "flat" else "RISING", budgetOk = b.mallocTrendOk)
+        Row2("session", "${b.setsLogged} sets ${b.promptsAnswered} prompts")
+
+        b.failure?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodySmall,
+                color = LiftosaurColor.red400,
+                textAlign = TextAlign.Center,
+                fontSize = 10.sp,
+            )
+        }
     }
 }
+
+/** Watch-screen width is the constraint, not precision — the log line carries the full value. */
+private fun Double.round1(): String = if (this < 0) "n/a" else String.format("%.1f", this)
 
 @Composable
 private fun Row2(label: String, value: String, budgetOk: Boolean? = null) {
