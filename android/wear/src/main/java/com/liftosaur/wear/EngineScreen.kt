@@ -47,11 +47,15 @@ fun EngineScreen() {
         // The self-test is given the app's *real* storage rather than the bundled fixture: the
         // fixture is one contrived 34KB program, and every number that turned out to matter is
         // a function of the account's actual size (ticket 07).
+        // Bench BEFORE self-test: the bench's session-peak anon is a §4 budget, and libc never
+        // returns freed arenas to the OS (ticket 12) — so any parse cycles the self-test runs
+        // first would sit in the bench's baseline as permanent RSS it gets blamed for.
+        // The self-test's own numbers don't care about order: cold start and init-anon are
+        // read from LiftosaurEngine.ColdStart, recorded where they happened at app launch.
+        bench = PreShipBench.run(repository)
         result = withContext(EngineDispatcher.dispatcher) {
             EngineSelfTest.run(context, repository.storage.value)
         }
-        // The full spec §4 table — a whole simulated workout, none of it persisted or sent.
-        bench = PreShipBench.run(repository)
         running = false
     }
 

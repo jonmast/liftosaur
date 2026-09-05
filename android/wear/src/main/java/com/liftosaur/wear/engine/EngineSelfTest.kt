@@ -103,8 +103,16 @@ object EngineSelfTest {
         // ticket 12 measured it landing as {"success":false,"error":"InternalError: out of
         // memory"} with no crash and a still-usable runtime. The final assertion here is that
         // the engine still answers correctly afterwards.
+        //
+        // The cache must be dropped first or the probe is a no-op: a call answered from the
+        // cached parse allocates almost nothing, and on a small account that fits inside the
+        // 64KB headroom — measured on-device as tripped=false against a 23KB storage (ticket
+        // 07). Invalidating forces the re-parse, whose allocations dwarf the headroom at any
+        // account size. Invalidate BEFORE reading mallocSize: freeing the cached parse lowers
+        // it, and the limit must sit just above the post-free floor.
         var memoryLimitTripOk = false
         if (firstCallOk) {
+            WatchJs.invalidateStorageCache()
             LiftosaurEngine.setMemoryLimit(LiftosaurEngine.mallocSize() + 64 * 1024)
             val tripped = runCatching { LiftosaurEngine.call("getNextHistoryRecord", payload) }
                 .fold(
