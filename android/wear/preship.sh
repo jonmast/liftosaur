@@ -182,7 +182,7 @@ echo "==> spec §4 budgets, release build, real account"
 echo "$line" | tr ' ' '\n' | grep '=' | awk -F= '
   BEGIN {
     b["coldStartMs"]="1500"; b["warmReadMs"]="50"; b["mutationMs"]="1000"
-    b["engineAnonKb"]="8192"; b["sessionAnonKb"]="65536"
+    b["engineAnonKb"]="8192"; b["sessionAnonKb"]="98304"
   }
   {
     budget = ($1 in b) ? "  (budget " b[$1] ")" : ""
